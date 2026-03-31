@@ -1,7 +1,21 @@
+from __future__ import annotations
+
 import re
+from typing import TYPE_CHECKING
+
+import discord
 from discord import Message
 
-async def send_split_message(self, response: str, message: Message, has_followed_up=False):
+if TYPE_CHECKING:
+    from ..client import discordClient as DiscordClient
+
+
+async def send_split_message(
+    self: DiscordClient,
+    response: str,
+    message: discord.Message | discord.Interaction,
+    has_followed_up: bool = False,
+) -> bool:
     char_limit = 1900
     if len(response) > char_limit:
         is_code_block = False
@@ -54,7 +68,11 @@ async def send_split_message(self, response: str, message: Message, has_followed
     return has_followed_up
 
 
-async def send_response_with_images(self, response: dict, message: Message):
+async def send_response_with_images(
+    self: DiscordClient,
+    response: dict[str, str | list[str]],
+    message: Message,
+) -> None:
     response_content = response.get("content")
     response_images = response.get("images")
 

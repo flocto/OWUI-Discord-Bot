@@ -4,17 +4,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from ..log import logger
+from ..types import Memory
 
 MEMORIES_PATH = Path(os.getenv("MEMORIES_PATH", "/app/memories/memories.json"))
 
 
-def _load() -> list[dict]:
+def _load() -> list[Memory]:
     if not MEMORIES_PATH.exists():
         return []
     return json.loads(MEMORIES_PATH.read_text())
 
 
-def _save(memories: list[dict]):
+def _save(memories: list[Memory]) -> None:
     MEMORIES_PATH.parent.mkdir(parents=True, exist_ok=True)
     MEMORIES_PATH.write_text(json.dumps(memories, indent=2))
 

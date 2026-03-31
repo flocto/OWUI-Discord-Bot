@@ -7,6 +7,7 @@ from .log import logger
 from .utils.message_utils import send_split_message
 from .utils.upload_files import upload_attachment
 from .tools.memory import add_memory, recall_memories, forget_memory
+from .types import ContentPart, ConversationMessage, ImagePart
 
 import discord
 from discord import app_commands
@@ -29,14 +30,14 @@ class discordClient(discord.Client):
         intents.message_content = True
         super().__init__(intents=intents)
         self.tree = app_commands.CommandTree(self)
-        self.chatModel = os.getenv("MODEL")
-        self.conversation_history = []
-        self.current_channel = None
+        self.chatModel: str | None = os.getenv("MODEL")
+        self.conversation_history: list[ConversationMessage] = []
+        self.current_channel: discord.abc.Messageable | None = None
         self.activity = discord.Activity(
             type=discord.ActivityType.listening, name="hi im mevin")
-        self.isPrivate = False
-        self.is_replying_all = os.getenv("REPLYING_ALL")
-        self.replying_all_discord_channel_id = os.getenv(
+        self.isPrivate: bool = False
+        self.is_replying_all: str | None = os.getenv("REPLYING_ALL")
+        self.replying_all_discord_channel_id: str | None = os.getenv(
             "REPLYING_ALL_DISCORD_CHANNEL_ID")
         self.openwebui_client = OpenWebUIClient(api_key=os.getenv(
             "API_KEY"), base_url=os.getenv("BASE_API_URL"))
@@ -48,15 +49,16 @@ class discordClient(discord.Client):
         self.openwebui_client.tool_registry.register(
             forget_memory, name="forget_memory")
 
-        self.message_queue = asyncio.Queue()
-        self.max_history_chars = int(
+        self.message_queue: asyncio.Queue[tuple[discord.Interaction, str]] = asyncio.Queue()
+        self.max_history_chars: int = int(
             os.getenv("MAX_HISTORY_CHARS", "32000"))  # ~8k tokens
-        self.batch_delay = float(os.getenv("BATCH_DELAY", "3"))
-        self.pending_batch: list[tuple] = []
-        self._batch_timer_task: asyncio.Task | None = None
+        self.batch_delay: float = float(os.getenv("BATCH_DELAY", "3"))
+        self.pending_batch: list[tuple[discord.Message, str, list[discord.Attachment]]] = []
+        self._batch_timer_task: asyncio.Task[None] | None = None
         self.file_library: dict[str, FileObject] = {}  # Maps filename to FileObject for re-attaching
+        self.pending_context: list[str] = []  # Reaction/event notes to prepend to the next batch flush
 
-    async def process_messages(self):
+    async def process_messages(self) -> None:
         while True:
             if self.current_channel is not None:
                 while not self.message_queue.empty():
@@ -71,11 +73,16 @@ class discordClient(discord.Client):
                             self.message_queue.task_done()
             await asyncio.sleep(1)
 
-    async def enqueue_message(self, message, user_message):
+    async def enqueue_message(self, message: discord.Interaction, user_message: str) -> None:
         await message.response.defer(ephemeral=self.isPrivate) if self.is_replying_all == "False" else None
         await self.message_queue.put((message, user_message))
 
-    async def enqueue_batch_message(self, message, user_message, attachments=None):
+    async def enqueue_batch_message(
+        self,
+        message: discord.Message,
+        user_message: str,
+        attachments: list[discord.Attachment] | None = None,
+    ) -> None:
         self.pending_batch.append(
             (message, user_message, list(attachments or [])))
         if self._batch_timer_task is not None and not self._batch_timer_task.done():
@@ -84,7 +91,7 @@ class discordClient(discord.Client):
             self._batch_flush_timer(message.channel)
         )
 
-    async def _batch_flush_timer(self, channel):
+    async def _batch_flush_timer(self, channel: discord.abc.Messageable) -> None:
         try:
             async with channel.typing():
                 await asyncio.sleep(self.batch_delay)
@@ -92,7 +99,7 @@ class discordClient(discord.Client):
             return
         await self._flush_batch()
 
-    async def _flush_batch(self):
+    async def _flush_batch(self) -> None:
         if not self.pending_batch:
             return
         batch = self.pending_batch
@@ -102,6 +109,11 @@ class discordClient(discord.Client):
         last_message = batch[-1][0]
         combined_user_message = "\n".join(user_msg for _, user_msg, _ in batch)
         all_attachments = [att for _, _, atts in batch for att in atts]
+
+        if self.pending_context:
+            context_block = "\n".join(self.pending_context)
+            combined_user_message = context_block + "\n" + combined_user_message
+            self.pending_context = []
 
         logger.info(
             f"Flushing batch of {len(batch)} message(s)"
@@ -116,19 +128,19 @@ class discordClient(discord.Client):
                 logger.exception(
                     f"Error while processing batched messages: {e}")
 
-    async def send_message(self, message, user_message):
+    async def send_message(self, message: discord.Interaction, user_message: str) -> None:
         try:
             response = await self.handle_response(user_message)
             await send_split_message(self, response, message)
         except Exception as e:
             logger.exception(f"Error while sending : {e}")
 
-    def _content_len(self, content) -> int:
+    def _content_len(self, content: str | list[ContentPart]) -> int:
         if isinstance(content, str):
             return len(content)
         return sum(len(p.get("text", "")) for p in content if isinstance(p, dict))
 
-    def _trim_history(self):
+    def _trim_history(self) -> None:
         anchor = 2  # always keep first 2 messages (system prompt exchange)
         total = sum(self._content_len(m["content"])
                     for m in self.conversation_history)
@@ -136,8 +148,8 @@ class discordClient(discord.Client):
             removed = self.conversation_history.pop(anchor)
             total -= self._content_len(removed["content"])
 
-    async def _attachment_to_part(self, att: discord.Attachment) -> dict[str, Any] | FileObject | None:
-        """Returns a dict (image content part), a file object (uploaded file), or None (unsupported)."""
+    async def _attachment_to_part(self, att: discord.Attachment) -> ImagePart | FileObject | None:
+        """Returns an ImagePart (inline base64), a FileObject (uploaded file), or None (unsupported)."""
         if not att.content_type:
             logger.warning(
                 f"Attachment '{att.filename}' has no content type, defaulting to application/octet-stream")
@@ -165,11 +177,12 @@ class discordClient(discord.Client):
                     f"Mentioned file '${name}' not found in file library (known: {list(self.file_library)})")
         return files
 
-    async def handle_response(self, user_message, attachments: list[discord.Attachment] | None = None) -> str:
+    async def handle_response(self, user_message: str, attachments: list[discord.Attachment] | None = None) -> str:
         turn_files: list[FileObject] = []
+        content: str | list[ContentPart]
         if attachments:
-            content: list = [{"type": "text", "text": user_message}]
-            unsupported = []
+            content = [{"type": "text", "text": user_message}]
+            unsupported: list[str] = []
             for att in attachments:
                 try:
                     part = await self._attachment_to_part(att)
@@ -197,7 +210,7 @@ class discordClient(discord.Client):
         self.conversation_history.append({'role': 'user', 'content': content})
         self._trim_history()
 
-        chat_kwargs = dict(
+        chat_kwargs: dict[str, Any] = dict(
             messages=self.conversation_history,
             tools=MEMORY_TOOLS,
             max_tool_calls=10,
@@ -223,7 +236,7 @@ class discordClient(discord.Client):
             {'role': 'assistant', 'content': bot_response})
         return bot_response
 
-    def reset_conversation_history(self):
+    def reset_conversation_history(self) -> None:
         self.conversation_history = []
 
 

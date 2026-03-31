@@ -2,6 +2,7 @@ import tempfile
 from pathlib import Path
 
 from ..log import logger
+from openai.types.file_object import FileObject
 from openwebui_client import OpenWebUIClient
 
 ACCEPTED_MIME_TYPES = {
@@ -56,7 +57,7 @@ ACCEPTED_MIME_TYPES = {
 TMP_DIR = Path(tempfile.mkdtemp(prefix="bot_"))
 
 
-def upload_attachment(client: OpenWebUIClient, filename: str, data: bytes, content_type: str):
+def upload_attachment(client: OpenWebUIClient, filename: str, data: bytes, content_type: str) -> FileObject:
     """
     Upload a file attachment to OpenWebUI via the shared temp directory.
     Returns the file object on success, or None if the MIME type is not accepted.
