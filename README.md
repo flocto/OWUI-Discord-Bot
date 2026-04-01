@@ -4,7 +4,7 @@ This repository is a rewrite of [this existing Open WebUI Discord Bot](https://g
 
 ## Usage
 
-Docker is required to deploy, or you can run the Python directly.
+Docker is required to deploy, or you can run the Python directly. You will need a Discord bot with the Message Content Intent enabled, and the bot must be invited to your server with the `applications.commands` and `bot` scopes, and at least the `Send Messages`, `Read Message History` permissions though to be honest I'm not going to update this if it requires more so just figure it out.
 
 First copy `.env.example` to `.env` and fill in the required values. 
 

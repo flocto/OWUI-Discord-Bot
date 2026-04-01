@@ -7,6 +7,7 @@ from .log import logger
 from .utils.message_utils import send_split_message
 from .utils.upload_files import upload_attachment
 from .tools.memory import add_memory, recall_memories, forget_memory
+from .tools.do_nothing import do_nothing
 from .types import ContentPart, ConversationMessage, ImagePart
 
 import discord
@@ -21,14 +22,21 @@ from typing import Any
 from dotenv import load_dotenv
 load_dotenv()
 
-MEMORY_TOOLS = ["add_memory", "recall_memories", "forget_memory"]
+TOOLS = [
+    # Memory tools
+    "add_memory", 
+    "recall_memories", 
+    "forget_memory", 
+    # Do nothing
+    "do_nothing"
+]
 
 
 class discordClient(discord.Client):
     def __init__(self) -> None:
         intents = discord.Intents.default()
         intents.message_content = True
-        super().__init__(intents=intents)
+        super().__init__(intents=intents, allowed_mentions=discord.AllowedMentions(everyone=False, users=True, roles=False))
         self.tree = app_commands.CommandTree(self)
         self.chatModel: str | None = os.getenv("MODEL")
         self.conversation_history: list[ConversationMessage] = []
@@ -48,6 +56,8 @@ class discordClient(discord.Client):
             recall_memories, name="recall_memories")
         self.openwebui_client.tool_registry.register(
             forget_memory, name="forget_memory")
+        self.openwebui_client.tool_registry.register(
+            do_nothing, name="do_nothing")
 
         self.message_queue: asyncio.Queue[tuple[discord.Interaction, str]] = asyncio.Queue()
         self.max_history_chars: int = int(
@@ -123,7 +133,8 @@ class discordClient(discord.Client):
         async with last_message.channel.typing():
             try:
                 response = await self.handle_response(combined_user_message, all_attachments)
-                await send_split_message(self, response, last_message)
+                if response is not None:
+                    await send_split_message(self, response, last_message)
             except Exception as e:
                 logger.exception(
                     f"Error while processing batched messages: {e}")
@@ -131,7 +142,8 @@ class discordClient(discord.Client):
     async def send_message(self, message: discord.Interaction, user_message: str) -> None:
         try:
             response = await self.handle_response(user_message)
-            await send_split_message(self, response, message)
+            if response is not None:
+                await send_split_message(self, response, message)
         except Exception as e:
             logger.exception(f"Error while sending : {e}")
 
@@ -177,7 +189,7 @@ class discordClient(discord.Client):
                     f"Mentioned file '${name}' not found in file library (known: {list(self.file_library)})")
         return files
 
-    async def handle_response(self, user_message: str, attachments: list[discord.Attachment] | None = None) -> str:
+    async def handle_response(self, user_message: str, attachments: list[discord.Attachment] | None = None) -> str | None:
         turn_files: list[FileObject] = []
         content: str | list[ContentPart]
         if attachments:
@@ -212,7 +224,7 @@ class discordClient(discord.Client):
 
         chat_kwargs: dict[str, Any] = dict(
             messages=self.conversation_history,
-            tools=MEMORY_TOOLS,
+            tools=TOOLS,
             max_tool_calls=10,
             model=self.chatModel,
         )
@@ -231,9 +243,11 @@ class discordClient(discord.Client):
             raise RuntimeError(f"API returned no usable response: {error or response}")
 
         if not bot_response:
-            logger.warning("API returned an empty response")
-        self.conversation_history.append(
-            {'role': 'assistant', 'content': bot_response})
+            logger.info("Bot chose to stay silent (empty response)")
+            self.conversation_history.append({'role': 'assistant', 'content': '[silent]'})
+            return None
+
+        self.conversation_history.append({'role': 'assistant', 'content': bot_response})
         return bot_response
 
     def reset_conversation_history(self) -> None:

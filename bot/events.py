@@ -28,7 +28,6 @@ def setup_events(client: DiscordClient) -> None:
                 return
             if client.replying_all_discord_channel_id:
                 if message.channel.id == int(client.replying_all_discord_channel_id):
-                    username = str(message.author)
                     attachments = message.attachments
                     att_placeholders = "".join(
                         f" [Attachment {i+1}: {a.filename}]" for i, a in enumerate(attachments)
@@ -39,8 +38,13 @@ def setup_events(client: DiscordClient) -> None:
                         f"{format_author(message.author)}: {resolve_mentions(message)}{att_placeholders}"
                     )
                     client.current_channel = message.channel
-                    logger.info(
-                        f"\x1b[31m{username}\x1b[0m : '{message.content}' ({client.current_channel})")
+
+                    author_label = format_author(message.author)
+                    preview = message.content[:80] + ("..." if len(message.content) > 80 else "")
+                    reply_tag = " [reply]" if message.reference else ""
+                    att_tag = f" [+{len(attachments)} attachment(s)]" if attachments else ""
+                    logger.info(f"\x1b[31m{author_label}\x1b[0m{reply_tag}{att_tag}: '{preview}'")
+
                     await client.enqueue_batch_message(message, user_message, attachments)
             else:
                 logger.exception(

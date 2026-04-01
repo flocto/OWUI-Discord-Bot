@@ -4,10 +4,21 @@ from discord import Message
 from ..log import logger
 
 
+def _sanitize(s: str) -> str:
+    """Strip characters that could break the [name (display: "nick")]: delimiter format.
+
+    Removes brackets (our delimiters), double quotes (our display-name quoting),
+    and newlines (which could make a display name look like a new author line).
+    """
+    return s.replace("[", "").replace("]", "").replace('"', "").replace("\n", " ").strip()
+
+
 def format_author(author: discord.abc.User) -> str:
+    name = _sanitize(author.name)
     if author.display_name != author.name:
-        return f"{author.name} (aka {author.display_name})"
-    return author.name
+        nick = _sanitize(author.display_name)
+        return f'[{name} (display: "{nick}")]'
+    return f"[{name}]"
 
 
 def resolve_mentions(message: Message) -> str:
